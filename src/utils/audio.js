@@ -1,6 +1,8 @@
-// Audio and Speech Utilities for RAAHI
+// Advanced Audio, Speech Recognition & Synthesized Cues for RAAHI
 
 let audioCtx = null;
+let micStream = null;
+let analyserNode = null;
 
 function getAudioContext() {
   if (typeof window === 'undefined') return null;
@@ -14,6 +16,62 @@ function getAudioContext() {
     audioCtx.resume();
   }
   return audioCtx;
+}
+
+/**
+ * Initializes real microphone stream and Web Audio Analyser
+ * Returns audio energy level (0-100) via callback
+ */
+export async function startMicAnalyser(onVolumeChange) {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return null;
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStream = stream;
+
+    const ctx = getAudioContext();
+    if (!ctx) return null;
+
+    const source = ctx.createMediaStreamSource(stream);
+    analyserNode = ctx.createAnalyser();
+    analyserNode.fftSize = 64;
+    source.connect(analyserNode);
+
+    const dataArray = new Uint8Array(analyserNode.frequencyBinCount);
+    let isTracking = true;
+
+    const checkVolume = () => {
+      if (!isTracking || !analyserNode) return;
+      analyserNode.getByteFrequencyData(dataArray);
+
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        sum += dataArray[i];
+      }
+      const average = sum / dataArray.length;
+      // Normalized level 0 to 100
+      const volumeLevel = Math.min(100, Math.round((average / 128) * 100));
+      onVolumeChange(volumeLevel, dataArray);
+
+      requestAnimationFrame(checkVolume);
+    };
+
+    requestAnimationFrame(checkVolume);
+
+    return () => {
+      isTracking = false;
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      micStream = null;
+      analyserNode = null;
+    };
+  } catch (err) {
+    console.warn('Microphone permission or stream not available:', err);
+    return null;
+  }
 }
 
 /**
@@ -89,11 +147,10 @@ export function playSosSiren() {
     osc.type = 'sawtooth';
     gain.gain.setValueAtTime(0.2, ctx.currentTime);
 
-    // LFO for modulation
     const lfo = ctx.createOscillator();
     const lfoGain = ctx.createGain();
     lfo.type = 'sine';
-    lfo.frequency.setValueAtTime(2, ctx.currentTime); // 2 Hz cycle
+    lfo.frequency.setValueAtTime(2, ctx.currentTime);
     lfoGain.gain.setValueAtTime(300, ctx.currentTime);
 
     osc.frequency.setValueAtTime(800, ctx.currentTime);
@@ -119,7 +176,7 @@ export function playSosSiren() {
 }
 
 /**
- * Text-to-speech helper with Indian English or preferred voice
+ * Text-to-speech helper
  */
 export function speakText(text, options = {}) {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
@@ -127,16 +184,19 @@ export function speakText(text, options = {}) {
   }
 
   try {
-    window.speechSynthesis.cancel(); // Stop any pending speech
+    window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = options.rate || 1.0;
     utterance.pitch = options.pitch || 1.0;
 
-    // Pick English (India) or clean English voice if available
     const voices = window.speechSynthesis.getVoices();
     const preferredVoice = voices.find(
-      (v) => v.lang.includes('en-IN') || v.name.includes('India') || v.lang.includes('en-GB') || v.lang.includes('en-US')
+      (v) =>
+        v.lang.includes('en-IN') ||
+        v.name.includes('India') ||
+        v.lang.includes('en-GB') ||
+        v.lang.includes('en-US')
     );
     if (preferredVoice) {
       utterance.voice = preferredVoice;
@@ -154,9 +214,6 @@ export function speakText(text, options = {}) {
   }
 }
 
-/**
- * Stop active speech synthesis
- */
 export function stopSpeech() {
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     window.speechSynthesis.cancel();
@@ -164,9 +221,89 @@ export function stopSpeech() {
 }
 
 /**
- * Speech Recognition Wrapper
+ * Natural language intent parser for voice commands
  */
-export function createSpeechRecognizer(onResult, onStatusChange) {
+export function parseVoiceIntent(transcript) {
+  const t = transcript.toLowerCase();
+
+  if (t.includes('library') || t.includes('book')) {
+    return {
+      type: 'navigate',
+      destination: 'central_library',
+      reply: 'Starting navigation to Central Library. Distance is 62 metres.',
+    };
+  }
+  if (t.includes('stair') || t.includes('steps')) {
+    return {
+      type: 'navigate',
+      destination: 'stairs',
+      reply: 'Navigating to East Wing Staircase. 98 metres ahead on the right.',
+    };
+  }
+  if (t.includes('washroom') || t.includes('toilet') || t.includes('restroom')) {
+    return {
+      type: 'navigate',
+      destination: 'washrooms',
+      reply: 'Washrooms are 38 metres ahead on the left. Shall I guide you there?',
+    };
+  }
+  if (t.includes('canteen') || t.includes('cafeteria') || t.includes('food') || t.includes('coffee')) {
+    return {
+      type: 'navigate',
+      destination: 'canteen',
+      reply: 'Setting route to Canteen food hub. 25 metres on your left.',
+    };
+  }
+  if (t.includes('lift') || t.includes('elevator')) {
+    return {
+      type: 'navigate',
+      destination: 'lift',
+      reply: 'Navigating to accessible Lift lobby. 90 metres ahead near the Admin block.',
+    };
+  }
+  if (t.includes('admin') || t.includes('office')) {
+    return {
+      type: 'navigate',
+      destination: 'admin_office',
+      reply: 'Setting course for Admin Office. 95 metres along Main Corridor.',
+    };
+  }
+  if (t.includes('room 101') || t.includes('classroom')) {
+    return {
+      type: 'navigate',
+      destination: 'room_101',
+      reply: 'Navigating to Room 101 on your right.',
+    };
+  }
+  if (t.includes('where am i') || t.includes('location') || t.includes('current position')) {
+    return {
+      type: 'info',
+      reply: 'You are currently at Main Entrance, Block A, Floor 1. Location confidence is 94%.',
+    };
+  }
+  if (t.includes('help') || t.includes('emergency') || t.includes('sos') || t.includes('security')) {
+    return {
+      type: 'sos',
+      reply: 'Alerting Campus Security Operations Center now. Help is on the way.',
+    };
+  }
+  if (t.includes('hazard') || t.includes('blocked') || t.includes('wet floor')) {
+    return {
+      type: 'hazard_check',
+      reply: 'Caution: Wet floor detected in Corridor B. Safe bypass available through Lab 102.',
+    };
+  }
+
+  return {
+    type: 'general',
+    reply: `I heard: "${transcript}". Say "Take me to library", "Where am I?", or "Nearest washroom".`,
+  };
+}
+
+/**
+ * Speech Recognition Instance Builder with robust error fallback
+ */
+export function createSpeechRecognizer(onResult, onStatusChange, onError) {
   if (typeof window === 'undefined') return null;
 
   const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -183,8 +320,9 @@ export function createSpeechRecognizer(onResult, onStatusChange) {
     recognizer.onstart = () => onStatusChange && onStatusChange('listening');
     recognizer.onend = () => onStatusChange && onStatusChange('idle');
     recognizer.onerror = (e) => {
-      console.warn('Speech recognition event:', e.error);
-      onStatusChange && onStatusChange('idle');
+      console.warn('Speech recognition error:', e.error);
+      if (onError) onError(e.error);
+      if (onStatusChange) onStatusChange('idle');
     };
 
     recognizer.onresult = (event) => {
@@ -196,6 +334,7 @@ export function createSpeechRecognizer(onResult, onStatusChange) {
 
     return recognizer;
   } catch (e) {
+    console.warn('Failed creating recognizer:', e);
     return null;
   }
 }

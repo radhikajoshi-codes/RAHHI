@@ -16,7 +16,7 @@ import ReportHazardModal from './components/modals/ReportHazardModal';
 import DemoWalkthroughModal from './components/modals/DemoWalkthroughModal';
 
 // Utilities & Data
-import { INITIAL_HAZARDS, ROOMS_DATA } from './data/campusData';
+import { INITIAL_HAZARDS, ROOMS_DATA, GRAPH_NODES } from './data/campusData';
 import { calculateRoute, getRouteComparison } from './utils/routing';
 import { speakText, playHazardAlert } from './utils/audio';
 
@@ -25,10 +25,14 @@ export default function App() {
   const [currentView, setCurrentView] = useState('home');
 
   // Campus User Context
-  const [selectedDestination, setSelectedDestination] = useState('central_library');
+  const [originNodeId, setOriginNodeId] = useState('n_start');
   const [currentLocationName, setCurrentLocationName] = useState('Main Entrance, Block A');
+  const [selectedDestination, setSelectedDestination] = useState('central_library');
   const [confidence, setConfidence] = useState(94);
   const [soundEnabled, setSoundEnabled] = useState(true);
+
+  // Toast notification state
+  const [toastMessage, setToastMessage] = useState(null);
 
   // Hazards State
   const [hazards, setHazards] = useState(INITIAL_HAZARDS);
@@ -40,14 +44,29 @@ export default function App() {
   const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Dynamic Route calculation
+  // Toast helper
+  const showToast = (msg) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  };
+
+  // Dynamic Route calculation from current originNodeId to selectedDestination
   const currentRoute = useMemo(() => {
-    // If user has accepted safe bypass or route is rerouted, calculate safe path
-    return calculateRoute('n_start', 'n_library_door', hazards, {
-      forceOriginal: !isReroutedRouteAccepted,
+    return calculateRoute(originNodeId, selectedDestination, hazards, {
+      forceOriginal: !isReroutedRouteAccepted && originNodeId === 'n_start' && selectedDestination === 'central_library',
       avoidCrowd: true,
     });
-  }, [hazards, isReroutedRouteAccepted]);
+  }, [originNodeId, selectedDestination, hazards, isReroutedRouteAccepted]);
+
+  // Destination room object
+  const destRoomObj = useMemo(() => {
+    return (
+      ROOMS_DATA.find((r) => r.id === selectedDestination) ||
+      ROOMS_DATA.find((r) => r.id === 'central_library')
+    );
+  }, [selectedDestination]);
 
   // Before & After comparison data for Rerouting view
   const comparisonData = useMemo(() => {
@@ -57,14 +76,18 @@ export default function App() {
   // Voice toggle
   const handleToggleSound = () => {
     setSoundEnabled((prev) => !prev);
+    showToast(soundEnabled ? 'Voice instructions muted' : 'Voice instructions enabled');
   };
 
   // Switch destination
   const handleSelectDestination = (destId) => {
     setSelectedDestination(destId);
     const room = ROOMS_DATA.find((r) => r.id === destId);
-    if (soundEnabled && room) {
-      speakText(`Destination set to ${room.name}.`);
+    if (room) {
+      showToast(`Destination set to ${room.name}`);
+      if (soundEnabled) {
+        speakText(`Destination set to ${room.name}.`);
+      }
     }
   };
 
@@ -72,17 +95,19 @@ export default function App() {
   const handleStartNavigation = () => {
     setCurrentView('navigate');
     if (soundEnabled) {
-      speakText('Starting navigation to Central Library. Walk straight for 35 metres.');
+      speakText(`Starting navigation to ${destRoomObj.name}. Walk along corridor.`);
     }
   };
 
-  // Confirm scanned location tag
-  const handleConfirmLocation = (tag) => {
-    setCurrentLocationName(`${tag.name}, ${tag.building}`);
-    setConfidence(tag.confidence);
+  // Confirm scanned location tag or photo landmark
+  const handleConfirmLocation = (loc) => {
+    setOriginNodeId(loc.nodeId || 'n_start');
+    setCurrentLocationName(`${loc.name}, ${loc.building}`);
+    setConfidence(loc.confidence);
     setCurrentView('navigate');
+    showToast(`Origin positioned at ${loc.name}`);
     if (soundEnabled) {
-      speakText(`Location verified at ${tag.name}. Calculating route.`);
+      speakText(`Location verified at ${loc.name}. Calculating route to ${destRoomObj.name}.`);
     }
   };
 
@@ -107,6 +132,7 @@ export default function App() {
   const handleAcceptReroute = () => {
     setIsReroutedRouteAccepted(true);
     setCurrentView('navigate');
+    showToast('Safe route via Lab 102 accepted');
     if (soundEnabled) {
       speakText('Safe route through Lab 102 accepted. Turn left into Lab 102 passage in 12 metres.');
     }
@@ -115,6 +141,7 @@ export default function App() {
   // Report a new hazard
   const handleSubmitHazard = (newHazard) => {
     setHazards((prev) => [newHazard, ...prev]);
+    showToast(`Hazard alert reported: ${newHazard.title}`);
     if (soundEnabled) {
       speakText(`New hazard reported at ${newHazard.location}. Updating campus safety routes.`);
     }
@@ -123,6 +150,11 @@ export default function App() {
   // Hackathon Demo Step Applicator
   const handleApplyDemoStep = (stepObj) => {
     setCurrentView(stepObj.view);
+    if (stepObj.step === 1) {
+      setOriginNodeId('n_start');
+      setCurrentLocationName('Main Entrance, Block A');
+      setSelectedDestination('central_library');
+    }
     if (stepObj.step >= 6) {
       setIsReroutedRouteAccepted(true);
     } else {
@@ -135,6 +167,14 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F8F9FD] flex flex-col md:flex-row text-slate-800 antialiased font-sans">
+      {/* Toast Notification Banner */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white text-xs font-bold px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2 animate-in slide-in-from-bottom duration-200">
+          <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
       {/* Left Sidebar Navigation */}
       <Sidebar
         currentView={currentView}
@@ -182,9 +222,12 @@ export default function App() {
           {currentView === 'navigate' && (
             <NavigateView
               route={currentRoute}
+              originName={currentLocationName}
+              destinationName={destRoomObj.name}
+              selectedDestination={selectedDestination}
+              onSelectDestination={handleSelectDestination}
               onOpenSos={() => setIsSosOpen(true)}
               onTriggerHazardAlert={handleTriggerHazardAlert}
-              onRepeatInstruction={() => {}}
               soundEnabled={soundEnabled}
             />
           )}

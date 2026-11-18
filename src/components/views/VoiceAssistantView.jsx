@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Mic,
   MicOff,
@@ -8,8 +8,16 @@ import {
   Bot,
   Send,
   Sparkles,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
-import { speakText, stopSpeech, createSpeechRecognizer } from '../../utils/audio';
+import {
+  speakText,
+  stopSpeech,
+  createSpeechRecognizer,
+  startMicAnalyser,
+  parseVoiceIntent,
+} from '../../utils/audio';
 
 export default function VoiceAssistantView({
   soundEnabled,
@@ -20,110 +28,165 @@ export default function VoiceAssistantView({
   const [isListening, setIsListening] = useState(false);
   const [speechSpeed, setSpeechSpeed] = useState('1.0x');
   const [queryText, setQueryText] = useState('');
-  const [activePrompt, setActivePrompt] = useState('Where is the nearest washroom?');
+  const [activePrompt, setActivePrompt] = useState('Tap the mic and speak a question or destination');
+  const [micVolume, setMicVolume] = useState(0);
+  const [audioBars, setAudioBars] = useState([8, 14, 20, 16, 26, 18, 22, 12]);
+  const [permissionError, setPermissionError] = useState(null);
+
+  const cleanupMicRef = useRef(null);
+  const recognizerRef = useRef(null);
 
   const [conversation, setConversation] = useState([
     {
       id: 1,
+      sender: 'raahi',
+      text: 'Hello Aarav! I am Raahi, your indoor navigation companion. Where would you like to go today?',
+    },
+    {
+      id: 2,
       sender: 'user',
       text: 'Take me to the library.',
     },
     {
-      id: 2,
-      sender: 'raahi',
-      text: 'Starting navigation to Central Library. Walk straight for 35 metres.',
-    },
-    {
       id: 3,
-      sender: 'user',
-      text: 'Where is the nearest washroom?',
-    },
-    {
-      id: 4,
       sender: 'raahi',
-      text: 'Washrooms are 18 metres behind you, on the left. Shall I navigate there?',
+      text: 'Starting navigation to Central Library. Walk straight along Main Corridor for 35 metres.',
     },
   ]);
 
   const trySayingPrompts = [
-    { text: 'Where am I?', answer: 'You are currently in Main Corridor, Block A, Floor 1 near Lab 102.' },
-    { text: 'How far is left?', answer: 'You have approximately 27 metres left to reach Central Library.' },
-    { text: 'Call for help', action: 'sos', answer: 'Initiating emergency SOS protocol. Connecting to campus security.' },
-    { text: 'Take me to the library', action: 'library', answer: 'Setting course for Central Library via safe bypass passage.' },
+    { text: 'Where is the nearest washroom?', label: 'Washroom' },
+    { text: 'Take me to the library', label: 'Library' },
+    { text: 'Take me to the staircase', label: 'Stairs' },
+    { text: 'Where am I?', label: 'Current Location' },
+    { text: 'Is Corridor B safe?', label: 'Hazard Check' },
+    { text: 'Call for help', label: 'Emergency SOS' },
   ];
 
-  const handleMicClick = () => {
-    if (isListening) {
-      setIsListening(false);
-      return;
+  // Stop listening on unmount
+  useEffect(() => {
+    return () => {
+      if (cleanupMicRef.current) cleanupMicRef.current();
+      if (recognizerRef.current) {
+        try {
+          recognizerRef.current.abort();
+        } catch (e) {}
+      }
+    };
+  }, []);
+
+  const startVoiceCapture = async () => {
+    setPermissionError(null);
+    setIsListening(true);
+    setActivePrompt('Listening to your voice... Speak clearly.');
+
+    // 1. Connect real Web Audio microphone analyser
+    try {
+      const stopAnalyser = await startMicAnalyser((volume, freqData) => {
+        setMicVolume(volume);
+        if (freqData && freqData.length >= 8) {
+          const bars = [
+            Math.max(6, Math.min(38, freqData[1] / 5)),
+            Math.max(6, Math.min(38, freqData[3] / 4)),
+            Math.max(6, Math.min(38, freqData[5] / 3)),
+            Math.max(6, Math.min(38, freqData[7] / 3)),
+            Math.max(6, Math.min(38, freqData[9] / 3)),
+            Math.max(6, Math.min(38, freqData[11] / 4)),
+            Math.max(6, Math.min(38, freqData[13] / 5)),
+            Math.max(6, Math.min(38, freqData[15] / 6)),
+          ];
+          setAudioBars(bars);
+        }
+      });
+      cleanupMicRef.current = stopAnalyser;
+    } catch (err) {
+      console.warn('Mic analyser warning:', err);
     }
 
-    setIsListening(true);
-
+    // 2. Start Speech Recognition
     const recognizer = createSpeechRecognizer(
       (transcript) => {
-        handleUserMessage(transcript);
-        setIsListening(false);
+        stopVoiceCapture();
+        handleUserSpeechInput(transcript);
       },
       (status) => {
-        if (status === 'idle') setIsListening(false);
+        if (status === 'idle') {
+          // Keep listening or close
+        }
+      },
+      (error) => {
+        if (error === 'not-allowed') {
+          setPermissionError('Microphone access was denied. Please allow microphone permission in your browser or use the quick voice chips below.');
+        } else if (error === 'no-speech') {
+          setActivePrompt('No speech detected. Tap the mic and try again.');
+        } else if (error === 'network') {
+          setPermissionError('Browser speech recognition network unavailable. You can tap any voice prompt below or type your query.');
+        }
+        stopVoiceCapture();
       }
     );
 
     if (recognizer) {
+      recognizerRef.current = recognizer;
       try {
         recognizer.start();
-      } catch (e) {
-        // Fallback simulation if mic permission or speech recognition unavailable
-        simulateMicInput();
+      } catch (err) {
+        console.warn('SpeechRecognition start error:', err);
       }
     } else {
-      simulateMicInput();
+      setPermissionError('Speech recognition is not supported in this browser. Please use the quick voice chips below or type your request.');
     }
   };
 
-  const simulateMicInput = () => {
-    setTimeout(() => {
-      handleUserMessage(activePrompt);
-      setIsListening(false);
-    }, 1800);
+  const stopVoiceCapture = () => {
+    setIsListening(false);
+    if (cleanupMicRef.current) {
+      cleanupMicRef.current();
+      cleanupMicRef.current = null;
+    }
+    if (recognizerRef.current) {
+      try {
+        recognizerRef.current.stop();
+      } catch (e) {}
+      recognizerRef.current = null;
+    }
+    setMicVolume(0);
   };
 
-  const handleUserMessage = (userText) => {
-    const newMsg = { id: Date.now(), sender: 'user', text: userText };
+  const handleMicToggle = () => {
+    if (isListening) {
+      stopVoiceCapture();
+      setActivePrompt('Tap the mic to ask a question');
+    } else {
+      startVoiceCapture();
+    }
+  };
+
+  const handleUserSpeechInput = (transcript) => {
+    setActivePrompt(`“${transcript}”`);
+    const newMsg = { id: Date.now(), sender: 'user', text: transcript };
     setConversation((prev) => [...prev, newMsg]);
 
-    const lower = userText.toLowerCase();
-    let reply = "I'm with you. Follow the highlighted corridor markers.";
-
-    if (lower.includes('washroom') || lower.includes('toilet') || lower.includes('restroom')) {
-      reply = 'Washrooms are 18 metres behind you, on the left. Shall I navigate there?';
-    } else if (lower.includes('library') || lower.includes('book')) {
-      reply = 'Starting navigation to Central Library. Walk straight for 35 metres.';
-      if (onNavigateTo) onNavigateTo('central_library');
-    } else if (lower.includes('where am i') || lower.includes('location')) {
-      reply = 'You are currently at Main Entrance, Block A, Floor 1. Location confidence is 94%.';
-    } else if (lower.includes('help') || lower.includes('emergency') || lower.includes('sos')) {
-      reply = 'Triggering emergency campus assistance now.';
-      if (onOpenSos) onOpenSos();
-    } else if (lower.includes('far') || lower.includes('distance')) {
-      reply = 'Central Library is 62 metres away, approximately 1 minute and 20 seconds of walking.';
-    }
+    // Parse natural language intent
+    const intent = parseVoiceIntent(transcript);
 
     setTimeout(() => {
       setConversation((prev) => [
         ...prev,
-        { id: Date.now() + 1, sender: 'raahi', text: reply },
+        { id: Date.now() + 1, sender: 'raahi', text: intent.reply },
       ]);
-      if (soundEnabled) {
-        speakText(reply, { rate: parseFloat(speechSpeed) });
-      }
-    }, 600);
-  };
 
-  const handleTrySaying = (item) => {
-    setActivePrompt(item.text);
-    handleUserMessage(item.text);
+      if (soundEnabled) {
+        speakText(intent.reply, { rate: parseFloat(speechSpeed) });
+      }
+
+      // Execute intent action
+      if (intent.type === 'navigate' && onNavigateTo) {
+        onNavigateTo(intent.destination);
+      } else if (intent.type === 'sos' && onOpenSos) {
+        onOpenSos();
+      }
+    }, 500);
   };
 
   const handleRepeatLast = () => {
@@ -139,36 +202,50 @@ export default function VoiceAssistantView({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <p className="text-xs font-bold text-teal-600 tracking-wide uppercase">
-            Hands-free guidance
+            Hands-free Smart Navigation
           </p>
           <h1 className="text-3xl font-extrabold text-slate-900 mt-1 tracking-tight">
             Voice Assistant
           </h1>
+          <p className="text-slate-500 font-medium text-sm mt-1">
+            Speak naturally to request directions, check current location, or ask about obstacles.
+          </p>
         </div>
 
-        {/* Voice assistance toggle widget */}
-        <div className="flex items-center gap-4 bg-white rounded-2xl border border-slate-200 p-3 shadow-xs">
-          <div>
-            <h4 className="text-xs font-bold text-slate-800">Voice assistance</h4>
-            <p className="text-[11px] text-slate-400 font-medium">
-              {soundEnabled ? `On · Speed ${speechSpeed}` : 'Muted'}
+        {/* Voice assistance toggle & speed selector */}
+        <div className="flex items-center gap-3 bg-white rounded-2xl border border-slate-200 p-2.5 shadow-xs">
+          <div className="text-right">
+            <h4 className="text-xs font-bold text-slate-800">Voice Guidance</h4>
+            <p className="text-[10px] text-teal-600 font-bold">
+              {soundEnabled ? `Active · ${speechSpeed}` : 'Muted'}
             </p>
           </div>
 
           <button
             onClick={onToggleSound}
-            className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
+            className={`w-11 h-6 rounded-full transition-colors relative p-0.5 cursor-pointer ${
               soundEnabled ? 'bg-teal-500' : 'bg-slate-300'
             }`}
           >
             <div
               className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform ${
-                soundEnabled ? 'translate-x-6' : 'translate-x-0'
+                soundEnabled ? 'translate-x-5' : 'translate-x-0'
               }`}
             />
           </button>
         </div>
       </div>
+
+      {/* Permission alert notice if mic is blocked */}
+      {permissionError && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <span className="font-bold">Microphone Status Notice: </span>
+            <span>{permissionError}</span>
+          </div>
+        </div>
+      )}
 
       {/* Main Grid: Left Mic Controller (7 cols) & Right Conversation (5 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -181,32 +258,39 @@ export default function VoiceAssistantView({
                 isListening ? 'bg-emerald-500 animate-ping' : 'bg-teal-500'
               }`}
             />
-            <span>{isListening ? 'Listening…' : 'Ready to listen'}</span>
+            <span>{isListening ? 'Listening to your voice…' : 'Tap microphone to speak'}</span>
           </div>
 
-          {/* Central Microphone Orb with radiant glow */}
+          {/* Central Microphone Orb with radiant audio wave reaction */}
           <div className="relative flex items-center justify-center my-4">
             {/* Outer animated gradient glow aura */}
             <div
-              className={`absolute w-52 h-52 rounded-full transition-all duration-700 ${
+              className={`absolute w-52 h-52 rounded-full transition-all duration-300 ${
                 isListening
-                  ? 'bg-gradient-to-tr from-teal-300/40 via-sky-300/40 to-pink-300/40 animate-ping opacity-60'
+                  ? 'bg-gradient-to-tr from-teal-300/40 via-sky-300/40 to-pink-300/40 animate-ping opacity-75'
                   : 'bg-gradient-to-tr from-teal-100/30 via-slate-100/30 to-pink-100/30 opacity-40'
               }`}
+              style={{
+                transform: `scale(${1 + micVolume / 120})`,
+              }}
             />
 
             {/* Middle decorative ring */}
             <div className="w-44 h-44 rounded-full border border-teal-200 flex items-center justify-center bg-white shadow-lg shadow-teal-500/10">
               {/* Inner glowing circle */}
               <button
-                onClick={handleMicClick}
-                className="w-32 h-32 rounded-full bg-gradient-to-br from-teal-200 via-sky-100 to-pink-200 p-1 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-inner group"
+                onClick={handleMicToggle}
+                className={`w-32 h-32 rounded-full p-1 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-md cursor-pointer ${
+                  isListening
+                    ? 'bg-gradient-to-br from-rose-400 to-rose-600 ring-4 ring-rose-200'
+                    : 'bg-gradient-to-br from-teal-300 via-sky-200 to-pink-200 ring-4 ring-teal-100'
+                }`}
                 aria-label="Toggle voice input"
               >
                 <div className="w-full h-full rounded-full bg-white flex items-center justify-center">
                   <Mic
                     className={`w-12 h-12 transition-colors ${
-                      isListening ? 'text-teal-600 scale-110' : 'text-slate-800'
+                      isListening ? 'text-rose-600 animate-pulse' : 'text-slate-800'
                     }`}
                   />
                 </div>
@@ -214,32 +298,34 @@ export default function VoiceAssistantView({
             </div>
           </div>
 
-          {/* Equalizer bars */}
-          <div className="flex items-center gap-1.5 h-8 my-3">
-            {[4, 12, 24, 18, 30, 16, 28, 14, 22, 8].map((h, i) => (
+          {/* Equalizer bars driven by real mic frequency */}
+          <div className="flex items-end gap-1.5 h-10 my-3">
+            {audioBars.map((height, i) => (
               <span
                 key={i}
-                className="w-1.5 bg-gradient-to-t from-teal-400 to-pink-400 rounded-full transition-all duration-200"
+                className={`w-1.5 rounded-full transition-all duration-100 ${
+                  isListening ? 'bg-gradient-to-t from-teal-400 to-rose-400' : 'bg-slate-200'
+                }`}
                 style={{
-                  height: isListening ? `${h}px` : '6px',
+                  height: isListening ? `${height}px` : '6px',
                 }}
               />
             ))}
           </div>
 
-          {/* Prompt Quote */}
-          <p className="text-xl font-extrabold text-slate-900 mt-2 text-center">
-            “{activePrompt}”
+          {/* Active Prompt Quote */}
+          <p className="text-lg font-extrabold text-slate-900 mt-2 text-center max-w-md px-4">
+            {activePrompt}
           </p>
           <p className="text-xs text-slate-400 font-medium mt-1">
-            Tap the mic or say “Hey Raahi”
+            Tap mic or use one of the quick commands below
           </p>
 
           {/* Control Buttons: Repeat & Mute */}
           <div className="grid grid-cols-2 gap-4 w-full max-w-sm mt-7">
             <button
               onClick={handleRepeatLast}
-              className="py-3 px-4 rounded-2xl bg-[#00BFA5] hover:bg-[#00A896] text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-md shadow-teal-500/25 active:scale-98 transition-all"
+              className="py-3 px-4 rounded-2xl bg-[#00BFA5] hover:bg-[#00A896] text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-md shadow-teal-500/25 active:scale-98 transition-all cursor-pointer"
             >
               <RotateCcw className="w-4 h-4" />
               <span>Repeat instruction</span>
@@ -247,26 +333,26 @@ export default function VoiceAssistantView({
 
             <button
               onClick={onToggleSound}
-              className="py-3 px-4 rounded-2xl bg-white hover:bg-slate-50 border border-pink-200 text-rose-500 font-extrabold text-xs flex items-center justify-center gap-2 shadow-xs active:scale-98 transition-all"
+              className="py-3 px-4 rounded-2xl bg-white hover:bg-slate-50 border border-pink-200 text-rose-500 font-extrabold text-xs flex items-center justify-center gap-2 shadow-xs active:scale-98 transition-all cursor-pointer"
             >
-              <VolumeX className="w-4 h-4" />
+              {soundEnabled ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
               <span>{soundEnabled ? 'Mute' : 'Unmute'}</span>
             </button>
           </div>
         </div>
 
-        {/* Right: Live Conversation Bubbles & Try Saying Chips */}
+        {/* Right: Live Conversation History & Quick Prompts */}
         <div className="lg:col-span-5 space-y-4">
           {/* Conversation history card */}
           <div className="bg-white rounded-3xl border border-pink-100 p-5 shadow-xs flex flex-col justify-between min-h-[340px]">
             <div>
               <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider mb-4 pb-2 border-b border-slate-100">
                 <span className="w-2.5 h-2.5 rounded-full bg-teal-500" />
-                <span>Conversation</span>
+                <span>Conversation History</span>
               </div>
 
               {/* Chat bubbles list */}
-              <div className="space-y-3.5 max-h-[300px] overflow-y-auto pr-1">
+              <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
                 {conversation.map((msg) => {
                   const isUser = msg.sender === 'user';
                   return (
@@ -302,7 +388,7 @@ export default function VoiceAssistantView({
               onSubmit={(e) => {
                 e.preventDefault();
                 if (queryText.trim()) {
-                  handleUserMessage(queryText.trim());
+                  handleUserSpeechInput(queryText.trim());
                   setQueryText('');
                 }
               }}
@@ -310,34 +396,35 @@ export default function VoiceAssistantView({
             >
               <input
                 type="text"
-                placeholder="Ask Raahi (e.g., Where is library?)..."
+                placeholder="Type a voice query (e.g. 'take me to library')..."
                 value={queryText}
                 onChange={(e) => setQueryText(e.target.value)}
-                className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50/60 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-400"
+                className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-400"
               />
               <button
                 type="submit"
-                className="p-2.5 rounded-xl bg-teal-500 text-white hover:bg-teal-600 transition-colors shrink-0 shadow-xs"
+                className="p-2.5 rounded-xl bg-teal-500 text-white hover:bg-teal-600 transition-colors shrink-0 shadow-xs cursor-pointer"
               >
                 <Send className="w-4 h-4" />
               </button>
             </form>
           </div>
 
-          {/* TRY SAYING Card */}
+          {/* TRY SAYING Quick Voice Chips */}
           <div className="bg-white rounded-3xl border border-pink-100 p-5 shadow-xs">
-            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
-              Try Saying
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
+              One-Tap Voice Commands
             </h3>
 
             <div className="flex flex-wrap gap-2">
               {trySayingPrompts.map((item, idx) => (
                 <button
                   key={idx}
-                  onClick={() => handleTrySaying(item)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-teal-50 border border-slate-200 hover:border-teal-300 text-slate-700 hover:text-teal-800 text-xs font-semibold transition-all"
+                  onClick={() => handleUserSpeechInput(item.text)}
+                  className="px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-teal-50 border border-slate-200 hover:border-teal-300 text-slate-700 hover:text-teal-800 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5"
                 >
-                  “{item.text}”
+                  <Sparkles className="w-3 h-3 text-teal-600" />
+                  <span>“{item.text}”</span>
                 </button>
               ))}
             </div>
