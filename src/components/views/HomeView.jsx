@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Utensils,
   Bath,
@@ -8,12 +8,19 @@ import {
   Compass,
   Radio,
   Volume2,
+  VolumeX,
   PhoneCall,
   CheckCircle2,
   ChevronDown,
   BookOpen,
+  Mic,
+  MicOff,
+  Sparkles,
+  Play,
+  Footprints,
 } from 'lucide-react';
 import { ROOMS_DATA } from '../../data/campusData';
+import { speakText, createSpeechRecognizer, startMicAnalyser } from '../../utils/audio';
 
 export default function HomeView({
   selectedDestination,
@@ -26,6 +33,12 @@ export default function HomeView({
   currentLocationName = 'Main Entrance, Block A',
 }) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [isHomeListening, setIsHomeListening] = useState(false);
+  const [voiceStatusText, setVoiceStatusText] = useState('Say "Start" or tap button to navigate');
+  const [audioBars, setAudioBars] = useState([6, 12, 18, 14, 22, 16, 10, 6]);
+
+  const cleanupMicRef = useRef(null);
+  const recognizerRef = useRef(null);
 
   const quickShortcuts = [
     { id: 'canteen', name: 'Canteen', icon: Utensils },
@@ -37,6 +50,125 @@ export default function HomeView({
   const currentDestObj =
     ROOMS_DATA.find((r) => r.id === selectedDestination) ||
     ROOMS_DATA.find((r) => r.id === 'central_library');
+
+  // Trigger navigation with speech announcement
+  const handleStartWithSpeech = () => {
+    stopHomeListening();
+    if (soundEnabled) {
+      speakText(
+        `Starting navigation to ${currentDestObj.name}. Walk straight along the main corridor for 35 metres. Turn-by-turn guidance active.`
+      );
+    }
+    onStartNavigation();
+  };
+
+  // Start continuous listening on Home for hotword "Start"
+  const startHomeListening = async () => {
+    setIsHomeListening(true);
+    setVoiceStatusText('Listening... Say "Start" aloud!');
+
+    // Start audio frequency wave analyser
+    try {
+      const stopAnalyser = await startMicAnalyser((volume, freqData) => {
+        if (freqData && freqData.length >= 8) {
+          const bars = [
+            Math.max(6, Math.min(32, freqData[1] / 6)),
+            Math.max(6, Math.min(32, freqData[3] / 5)),
+            Math.max(6, Math.min(32, freqData[5] / 4)),
+            Math.max(6, Math.min(32, freqData[7] / 4)),
+            Math.max(6, Math.min(32, freqData[9] / 4)),
+            Math.max(6, Math.min(32, freqData[11] / 5)),
+            Math.max(6, Math.min(32, freqData[13] / 6)),
+            Math.max(6, Math.min(32, freqData[15] / 7)),
+          ];
+          setAudioBars(bars);
+        }
+      });
+      cleanupMicRef.current = stopAnalyser;
+    } catch (err) {
+      console.warn('Mic analyser warning on home:', err);
+    }
+
+    // Initialize speech recognizer
+    const recognizer = createSpeechRecognizer(
+      (transcript) => {
+        const text = transcript.toLowerCase();
+        setVoiceStatusText(`Heard: "${transcript}"`);
+
+        // Check if user said "start", "start navigation", "go", "let's go"
+        if (
+          text.includes('start') ||
+          text.includes('go') ||
+          text.includes('navigate') ||
+          text.includes('begin') ||
+          text.includes('library')
+        ) {
+          setVoiceStatusText('✓ "Start" recognized! Launching navigation...');
+          if (soundEnabled) {
+            speakText(`Voice command start recognized. Navigating to ${currentDestObj.name}.`);
+          }
+          setTimeout(() => {
+            handleStartWithSpeech();
+          }, 800);
+        } else {
+          setVoiceStatusText(`Heard "${transcript}". Say "Start" to navigate.`);
+        }
+      },
+      (status) => {},
+      (error) => {
+        console.warn('Home speech recognizer error:', error);
+        setVoiceStatusText('Mic permission or speech timeout. Tap button or try again.');
+        setIsHomeListening(false);
+      }
+    );
+
+    if (recognizer) {
+      recognizerRef.current = recognizer;
+      try {
+        recognizer.start();
+      } catch (e) {}
+    }
+  };
+
+  const stopHomeListening = () => {
+    setIsHomeListening(false);
+    if (cleanupMicRef.current) {
+      cleanupMicRef.current();
+      cleanupMicRef.current = null;
+    }
+    if (recognizerRef.current) {
+      try {
+        recognizerRef.current.stop();
+      } catch (e) {}
+      recognizerRef.current = null;
+    }
+    setVoiceStatusText('Say "Start" or tap button to navigate');
+  };
+
+  const handleToggleHomeMic = () => {
+    if (isHomeListening) {
+      stopHomeListening();
+    } else {
+      startHomeListening();
+    }
+  };
+
+  // Simulate speaking "Start" for demo / fallback
+  const handleSimulateVoiceStart = () => {
+    setVoiceStatusText('Heard: "Start"');
+    if (soundEnabled) {
+      speakText(`Voice command start received. Launching navigation to ${currentDestObj.name}.`);
+    }
+    setTimeout(() => {
+      handleStartWithSpeech();
+    }, 700);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopHomeListening();
+    };
+  }, []);
 
   return (
     <div className="max-w-6xl mx-auto space-y-7 animate-in fade-in duration-300">
@@ -67,6 +199,60 @@ export default function HomeView({
         </div>
       </div>
 
+      {/* Voice Hotword & Start Interactive Banner */}
+      <div className="bg-gradient-to-r from-teal-50 via-sky-50 to-pink-50 border border-teal-200/90 rounded-3xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5 w-full sm:w-auto">
+          <button
+            onClick={handleToggleHomeMic}
+            className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all cursor-pointer shadow-md ${
+              isHomeListening
+                ? 'bg-rose-500 text-white ring-4 ring-rose-200 animate-pulse'
+                : 'bg-teal-500 text-white hover:bg-teal-600'
+            }`}
+            title={isHomeListening ? 'Stop listening' : 'Start voice listening for "Start"'}
+          >
+            {isHomeListening ? <Mic className="w-6 h-6 animate-bounce" /> : <Mic className="w-6 h-6" />}
+          </button>
+
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-extrabold text-teal-800 uppercase tracking-wider">
+                Voice Interactive Mode
+              </span>
+              <span className={`w-2 h-2 rounded-full ${isHomeListening ? 'bg-emerald-500 animate-ping' : 'bg-slate-300'}`} />
+            </div>
+            <p className="text-sm font-bold text-slate-800 mt-0.5">
+              {voiceStatusText}
+            </p>
+          </div>
+        </div>
+
+        {/* Audio waves & Quick "Say Start" test pill */}
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+          {/* Animated sound wave bars */}
+          <div className="flex items-end gap-1 h-6">
+            {audioBars.map((height, i) => (
+              <span
+                key={i}
+                className={`w-1 rounded-full transition-all duration-100 ${
+                  isHomeListening ? 'bg-teal-500' : 'bg-slate-300'
+                }`}
+                style={{ height: `${height}px` }}
+              />
+            ))}
+          </div>
+
+          <button
+            onClick={handleSimulateVoiceStart}
+            className="px-3.5 py-2 rounded-xl bg-white hover:bg-teal-50 border border-teal-300 text-teal-800 font-extrabold text-xs shadow-xs transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            title="Simulate speaking 'Start'"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-teal-600" />
+            <span>Voice Test: Say "Start"</span>
+          </button>
+        </div>
+      </div>
+
       {/* Hero Destination Selection Card */}
       <div className="bg-white rounded-3xl border border-pink-100 p-6 md:p-8 shadow-sm flex flex-col lg:flex-row items-center justify-between gap-8 relative overflow-hidden">
         {/* Subtle background glow */}
@@ -83,7 +269,7 @@ export default function HomeView({
               <button
                 type="button"
                 onClick={() => setDropdownOpen(!dropdownOpen)}
-                className="w-full bg-white hover:bg-slate-50/80 border-2 border-teal-200/90 rounded-2xl p-4 flex items-center justify-between transition-all shadow-xs text-left group"
+                className="w-full bg-white hover:bg-slate-50/80 border-2 border-teal-200/90 rounded-2xl p-4 flex items-center justify-between transition-all shadow-xs text-left group cursor-pointer"
               >
                 <div className="flex items-center gap-3.5">
                   <div className="w-11 h-11 rounded-xl bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-600 group-hover:scale-105 transition-transform">
@@ -119,7 +305,7 @@ export default function HomeView({
                         onSelectDestination(room.id);
                         setDropdownOpen(false);
                       }}
-                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors text-left ${
+                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm transition-colors text-left cursor-pointer ${
                         selectedDestination === room.id
                           ? 'bg-teal-50 text-teal-800 font-bold'
                           : 'hover:bg-slate-50 text-slate-700'
@@ -149,7 +335,7 @@ export default function HomeView({
                 <button
                   key={item.id}
                   onClick={() => onSelectDestination(item.id)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
                     isCurrent
                       ? 'bg-rose-50 border-rose-300 text-rose-700 shadow-xs'
                       : 'bg-pink-50/60 hover:bg-pink-100/80 border-pink-200 text-slate-700'
@@ -162,14 +348,22 @@ export default function HomeView({
             })}
           </div>
 
-          {/* Start Navigation Action Button */}
-          <div className="pt-2">
+          {/* START NAVIGATION BUTTON - Tap to Speak & Navigate */}
+          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <button
-              onClick={onStartNavigation}
-              className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-teal-400 to-[#00BFA5] text-white font-extrabold text-base tracking-wide flex items-center justify-center gap-3 shadow-lg shadow-teal-500/30 hover:shadow-teal-500/40 hover:scale-[1.01] active:scale-[0.99] transition-all"
+              onClick={handleStartWithSpeech}
+              className="px-8 py-4 rounded-2xl bg-gradient-to-r from-teal-400 to-[#00BFA5] text-white font-extrabold text-base tracking-wide flex items-center justify-center gap-3 shadow-lg shadow-teal-500/30 hover:shadow-teal-500/40 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer group"
             >
-              <Send className="w-5 h-5 fill-white rotate-45" />
+              <Send className="w-5 h-5 fill-white rotate-45 group-hover:translate-x-0.5 transition-transform" />
               <span>Start Navigation</span>
+            </button>
+
+            <button
+              onClick={handleToggleHomeMic}
+              className="px-5 py-4 rounded-2xl bg-white hover:bg-slate-50 border-2 border-teal-200 text-teal-800 font-extrabold text-sm flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer"
+            >
+              <Mic className="w-4 h-4 text-teal-600" />
+              <span>{isHomeListening ? 'Mute Mic' : 'Listen for "Start"'}</span>
             </button>
           </div>
         </div>
@@ -199,10 +393,9 @@ export default function HomeView({
               <Volume2 className="w-5 h-5" />
             </div>
 
-            {/* Custom toggle switch */}
             <button
               onClick={onToggleSound}
-              className={`w-12 h-6 rounded-full transition-colors relative p-0.5 ${
+              className={`w-12 h-6 rounded-full transition-colors relative p-0.5 cursor-pointer ${
                 soundEnabled ? 'bg-teal-500' : 'bg-slate-300'
               }`}
               aria-label="Toggle voice"
@@ -222,7 +415,6 @@ export default function HomeView({
             </p>
           </div>
 
-          {/* Equalizer Wave simulation */}
           <div className="flex items-end gap-1 h-6 mt-4">
             <span className="w-1.5 bg-teal-400 rounded-full h-3 animate-pulse" />
             <span className="w-1.5 bg-teal-500 rounded-full h-5 animate-pulse" />
@@ -251,7 +443,6 @@ export default function HomeView({
             </p>
           </div>
 
-          {/* Confidence Progress Bar */}
           <div className="mt-4">
             <div className="flex items-center justify-between text-xs font-semibold text-slate-600 mb-1">
               <span>Location confidence</span>
@@ -284,11 +475,10 @@ export default function HomeView({
             </p>
           </div>
 
-          {/* SOS button */}
           <div className="mt-4">
             <button
               onClick={onOpenSos}
-              className="w-full py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 active:scale-[0.98] text-white font-bold text-xs tracking-wide flex items-center justify-center gap-2 shadow-md shadow-rose-500/25 transition-all"
+              className="w-full py-2.5 rounded-2xl bg-rose-500 hover:bg-rose-600 active:scale-[0.98] text-white font-bold text-xs tracking-wide flex items-center justify-center gap-2 shadow-md shadow-rose-500/25 transition-all cursor-pointer"
             >
               <PhoneCall className="w-3.5 h-3.5 fill-white" />
               <span>SOS · Get Help</span>
