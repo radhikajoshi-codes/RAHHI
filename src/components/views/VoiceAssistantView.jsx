@@ -17,6 +17,7 @@ import {
   createSpeechRecognizer,
   startMicAnalyser,
   parseVoiceIntent,
+  playVoiceAcknowledge,
 } from '../../utils/audio';
 
 export default function VoiceAssistantView({
@@ -28,7 +29,8 @@ export default function VoiceAssistantView({
   const [isListening, setIsListening] = useState(false);
   const [speechSpeed, setSpeechSpeed] = useState('1.0x');
   const [queryText, setQueryText] = useState('');
-  const [activePrompt, setActivePrompt] = useState('Tap the mic and speak a question or destination');
+  const [activePrompt, setActivePrompt] = useState('Tap the mic and speak any command (e.g. "Start navigation")');
+  const [interimText, setInterimText] = useState('');
   const [micVolume, setMicVolume] = useState(0);
   const [audioBars, setAudioBars] = useState([8, 14, 20, 16, 26, 18, 22, 12]);
   const [permissionError, setPermissionError] = useState(null);
@@ -40,25 +42,16 @@ export default function VoiceAssistantView({
     {
       id: 1,
       sender: 'raahi',
-      text: 'Hello Aarav! I am Raahi, your indoor navigation companion. Where would you like to go today?',
-    },
-    {
-      id: 2,
-      sender: 'user',
-      text: 'Take me to the library.',
-    },
-    {
-      id: 3,
-      sender: 'raahi',
-      text: 'Starting navigation to Central Library. Walk straight along Main Corridor for 35 metres.',
+      text: 'Hello Aarav! I am listening. You can say "Start navigation", "Where is the library?", "Where is the nearest washroom?", or "Where am I?".',
     },
   ]);
 
   const trySayingPrompts = [
-    { text: 'Where is the nearest washroom?', label: 'Washroom' },
+    { text: 'Start navigation', label: 'Start Nav' },
     { text: 'Take me to the library', label: 'Library' },
-    { text: 'Take me to the staircase', label: 'Stairs' },
-    { text: 'Where am I?', label: 'Current Location' },
+    { text: 'Take me to the staircase', label: 'Staircase' },
+    { text: 'Where is the nearest washroom?', label: 'Washroom' },
+    { text: 'Where am I?', label: 'Location' },
     { text: 'Is Corridor B safe?', label: 'Hazard Check' },
     { text: 'Call for help', label: 'Emergency SOS' },
   ];
@@ -66,19 +59,15 @@ export default function VoiceAssistantView({
   // Stop listening on unmount
   useEffect(() => {
     return () => {
-      if (cleanupMicRef.current) cleanupMicRef.current();
-      if (recognizerRef.current) {
-        try {
-          recognizerRef.current.abort();
-        } catch (e) {}
-      }
+      stopVoiceCapture();
     };
   }, []);
 
   const startVoiceCapture = async () => {
     setPermissionError(null);
     setIsListening(true);
-    setActivePrompt('Listening to your voice... Speak clearly.');
+    setActivePrompt('Listening... Speak your command clearly.');
+    setInterimText('');
 
     // 1. Connect real Web Audio microphone analyser
     try {
@@ -105,25 +94,34 @@ export default function VoiceAssistantView({
 
     // 2. Start Speech Recognition
     const recognizer = createSpeechRecognizer(
-      (transcript) => {
-        stopVoiceCapture();
-        handleUserSpeechInput(transcript);
+      (transcript, isFinal) => {
+        setInterimText(transcript);
+        if (isFinal || transcript.toLowerCase().includes('start') || transcript.length > 15) {
+          playVoiceAcknowledge();
+          handleUserSpeechInput(transcript);
+          setInterimText('');
+        }
       },
       (status) => {
-        if (status === 'idle') {
-          // Keep listening or close
+        if (status === 'idle' && isListening) {
+          try {
+            recognizer.start();
+          } catch (e) {}
         }
       },
       (error) => {
+        console.warn('Voice recognizer error:', error);
         if (error === 'not-allowed') {
           setPermissionError('Microphone access was denied. Please allow microphone permission in your browser or use the quick voice chips below.');
+          stopVoiceCapture();
         } else if (error === 'no-speech') {
-          setActivePrompt('No speech detected. Tap the mic and try again.');
+          setActivePrompt('Listening... Speak a destination or command.');
         } else if (error === 'network') {
           setPermissionError('Browser speech recognition network unavailable. You can tap any voice prompt below or type your query.');
+          stopVoiceCapture();
         }
-        stopVoiceCapture();
-      }
+      },
+      { continuous: true }
     );
 
     if (recognizer) {
@@ -151,6 +149,7 @@ export default function VoiceAssistantView({
       recognizerRef.current = null;
     }
     setMicVolume(0);
+    setInterimText('');
   };
 
   const handleMicToggle = () => {
@@ -181,12 +180,14 @@ export default function VoiceAssistantView({
       }
 
       // Execute intent action
-      if (intent.type === 'navigate' && onNavigateTo) {
+      if (intent.type === 'start_navigation' && onNavigateTo) {
+        onNavigateTo('central_library');
+      } else if (intent.type === 'navigate' && onNavigateTo) {
         onNavigateTo(intent.destination);
       } else if (intent.type === 'sos' && onOpenSos) {
         onOpenSos();
       }
-    }, 500);
+    }, 450);
   };
 
   const handleRepeatLast = () => {
@@ -208,7 +209,7 @@ export default function VoiceAssistantView({
             Voice Assistant
           </h1>
           <p className="text-slate-500 font-medium text-sm mt-1">
-            Speak naturally to request directions, check current location, or ask about obstacles.
+            Speak naturally to request directions, start navigation, or ask about campus locations.
           </p>
         </div>
 
@@ -258,12 +259,11 @@ export default function VoiceAssistantView({
                 isListening ? 'bg-emerald-500 animate-ping' : 'bg-teal-500'
               }`}
             />
-            <span>{isListening ? 'Listening to your voice…' : 'Tap microphone to speak'}</span>
+            <span>{isListening ? 'Listening... Speak now!' : 'Tap microphone to speak'}</span>
           </div>
 
           {/* Central Microphone Orb with radiant audio wave reaction */}
           <div className="relative flex items-center justify-center my-4">
-            {/* Outer animated gradient glow aura */}
             <div
               className={`absolute w-52 h-52 rounded-full transition-all duration-300 ${
                 isListening
@@ -275,9 +275,7 @@ export default function VoiceAssistantView({
               }}
             />
 
-            {/* Middle decorative ring */}
             <div className="w-44 h-44 rounded-full border border-teal-200 flex items-center justify-center bg-white shadow-lg shadow-teal-500/10">
-              {/* Inner glowing circle */}
               <button
                 onClick={handleMicToggle}
                 className={`w-32 h-32 rounded-full p-1 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-md cursor-pointer ${
@@ -313,12 +311,12 @@ export default function VoiceAssistantView({
             ))}
           </div>
 
-          {/* Active Prompt Quote */}
+          {/* Active Prompt Quote & Interim Transcript */}
           <p className="text-lg font-extrabold text-slate-900 mt-2 text-center max-w-md px-4">
-            {activePrompt}
+            {interimText ? `“${interimText}”` : activePrompt}
           </p>
           <p className="text-xs text-slate-400 font-medium mt-1">
-            Tap mic or use one of the quick commands below
+            Say "Start", "Take me to library", or "Where is washroom?"
           </p>
 
           {/* Control Buttons: Repeat & Mute */}
@@ -343,7 +341,6 @@ export default function VoiceAssistantView({
 
         {/* Right: Live Conversation History & Quick Prompts */}
         <div className="lg:col-span-5 space-y-4">
-          {/* Conversation history card */}
           <div className="bg-white rounded-3xl border border-pink-100 p-5 shadow-xs flex flex-col justify-between min-h-[340px]">
             <div>
               <div className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase tracking-wider mb-4 pb-2 border-b border-slate-100">
@@ -396,7 +393,7 @@ export default function VoiceAssistantView({
             >
               <input
                 type="text"
-                placeholder="Type a voice query (e.g. 'take me to library')..."
+                placeholder="Type a voice query (e.g. 'start', 'library')..."
                 value={queryText}
                 onChange={(e) => setQueryText(e.target.value)}
                 className="w-full text-xs px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-400"
@@ -410,7 +407,7 @@ export default function VoiceAssistantView({
             </form>
           </div>
 
-          {/* TRY SAYING Quick Voice Chips */}
+          {/* One-Tap Voice Commands */}
           <div className="bg-white rounded-3xl border border-pink-100 p-5 shadow-xs">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
               One-Tap Voice Commands

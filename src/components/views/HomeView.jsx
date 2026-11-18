@@ -18,9 +18,23 @@ import {
   Sparkles,
   Play,
   Footprints,
+  Activity,
+  Layers,
+  MapPin,
 } from 'lucide-react';
 import { ROOMS_DATA } from '../../data/campusData';
-import { speakText, createSpeechRecognizer, startMicAnalyser } from '../../utils/audio';
+import {
+  speakText,
+  createSpeechRecognizer,
+  startMicAnalyser,
+  parseVoiceIntent,
+  playVoiceAcknowledge,
+} from '../../utils/audio';
+
+// Components
+import RealisticCompass from '../RealisticCompass';
+import SlidingDestinationBar from '../SlidingDestinationBar';
+import WearableRigWidget from '../WearableRigWidget';
 
 export default function HomeView({
   selectedDestination,
@@ -35,15 +49,18 @@ export default function HomeView({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [isHomeListening, setIsHomeListening] = useState(false);
   const [voiceStatusText, setVoiceStatusText] = useState('Say "Start" or tap button to navigate');
+  const [interimTranscript, setInterimTranscript] = useState('');
   const [audioBars, setAudioBars] = useState([6, 12, 18, 14, 22, 16, 10, 6]);
 
   const cleanupMicRef = useRef(null);
   const recognizerRef = useRef(null);
 
   const quickShortcuts = [
+    { id: 'central_library', name: 'Central Library', icon: BookOpen },
+    { id: 'stairs', name: 'East Staircase', icon: Building },
     { id: 'canteen', name: 'Canteen', icon: Utensils },
     { id: 'washrooms', name: 'Washroom', icon: Bath },
-    { id: 'lift', name: 'Lift', icon: Building },
+    { id: 'lift', name: 'Lift & Ramp', icon: Building },
     { id: 'admin_office', name: 'Admin Office', icon: UserCheck },
   ];
 
@@ -54,6 +71,7 @@ export default function HomeView({
   // Trigger navigation with speech announcement
   const handleStartWithSpeech = () => {
     stopHomeListening();
+    playVoiceAcknowledge();
     if (soundEnabled) {
       speakText(
         `Starting navigation to ${currentDestObj.name}. Walk straight along the main corridor for 35 metres. Turn-by-turn guidance active.`
@@ -62,10 +80,11 @@ export default function HomeView({
     onStartNavigation();
   };
 
-  // Start continuous listening on Home for hotword "Start"
+  // Start continuous listening on Home for hotwords
   const startHomeListening = async () => {
     setIsHomeListening(true);
-    setVoiceStatusText('Listening... Say "Start" aloud!');
+    setVoiceStatusText('Listening... Say "Start" or any destination');
+    setInterimTranscript('');
 
     // Start audio frequency wave analyser
     try {
@@ -86,40 +105,55 @@ export default function HomeView({
       });
       cleanupMicRef.current = stopAnalyser;
     } catch (err) {
-      console.warn('Mic analyser warning on home:', err);
+      console.warn('Mic analyser on home:', err);
     }
 
-    // Initialize speech recognizer
+    // Initialize continuous speech recognizer
     const recognizer = createSpeechRecognizer(
-      (transcript) => {
-        const text = transcript.toLowerCase();
-        setVoiceStatusText(`Heard: "${transcript}"`);
+      (transcript, isFinal) => {
+        setInterimTranscript(transcript);
+        const parsed = parseVoiceIntent(transcript);
 
-        // Check if user said "start", "start navigation", "go", "let's go"
-        if (
-          text.includes('start') ||
-          text.includes('go') ||
-          text.includes('navigate') ||
-          text.includes('begin') ||
-          text.includes('library')
-        ) {
-          setVoiceStatusText('✓ "Start" recognized! Launching navigation...');
+        // Check if intent is start navigation
+        if (parsed.type === 'start_navigation') {
+          playVoiceAcknowledge();
+          setVoiceStatusText('✓ Voice command "Start" recognized!');
           if (soundEnabled) {
-            speakText(`Voice command start recognized. Navigating to ${currentDestObj.name}.`);
+            speakText(`Starting navigation to ${currentDestObj.name}.`);
           }
           setTimeout(() => {
             handleStartWithSpeech();
-          }, 800);
+          }, 600);
+        } else if (parsed.type === 'navigate') {
+          playVoiceAcknowledge();
+          onSelectDestination(parsed.destination);
+          setVoiceStatusText(`✓ Destination set to ${parsed.destination.replace('_', ' ')}! Say "Start" to begin.`);
+          if (soundEnabled) {
+            speakText(parsed.reply);
+          }
+        } else if (parsed.type === 'sos') {
+          onOpenSos();
         } else {
-          setVoiceStatusText(`Heard "${transcript}". Say "Start" to navigate.`);
+          setVoiceStatusText(`Heard: "${transcript}". Say "Start" to begin.`);
         }
       },
-      (status) => {},
+      (status) => {
+        if (status === 'idle' && isHomeListening) {
+          // Restart if still in listening mode
+          try {
+            recognizer.start();
+          } catch (e) {}
+        }
+      },
       (error) => {
         console.warn('Home speech recognizer error:', error);
-        setVoiceStatusText('Mic permission or speech timeout. Tap button or try again.');
-        setIsHomeListening(false);
-      }
+        if (error === 'not-allowed') {
+          setVoiceStatusText('Microphone permission needed. Tap button below or use quick chips.');
+        } else if (error === 'no-speech') {
+          setVoiceStatusText('Listening... Say "Start" to navigate.');
+        }
+      },
+      { continuous: true }
     );
 
     if (recognizer) {
@@ -143,6 +177,7 @@ export default function HomeView({
       recognizerRef.current = null;
     }
     setVoiceStatusText('Say "Start" or tap button to navigate');
+    setInterimTranscript('');
   };
 
   const handleToggleHomeMic = () => {
@@ -153,8 +188,9 @@ export default function HomeView({
     }
   };
 
-  // Simulate speaking "Start" for demo / fallback
+  // Simulate speaking "Start" for demo / testing
   const handleSimulateVoiceStart = () => {
+    playVoiceAcknowledge();
     setVoiceStatusText('Heard: "Start"');
     if (soundEnabled) {
       speakText(`Voice command start received. Launching navigation to ${currentDestObj.name}.`);
@@ -171,9 +207,9 @@ export default function HomeView({
   }, []);
 
   return (
-    <div className="max-w-6xl mx-auto space-y-7 animate-in fade-in duration-300">
-      {/* Top Welcome Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-300">
+      {/* Top Welcome Header with Connected Hardware Rig in Corner */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <p className="text-xs font-bold text-teal-600 tracking-wide uppercase">
             Your Indoor Navigation Companion
@@ -182,22 +218,27 @@ export default function HomeView({
             Good morning, Aarav <span className="inline-block animate-wave">👋</span>
           </h1>
           <p className="text-slate-500 font-medium text-sm mt-1">
-            Where would you like to go today?
+            Where would you like to go today? Speak or slide below to choose.
           </p>
         </div>
 
-        {/* User profile & beacon badge */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-50 border border-teal-200 text-teal-800 text-xs font-semibold shadow-xs">
-            <span className="w-2 h-2 rounded-full bg-teal-500 animate-ping"></span>
-            <span>Beacons connected</span>
-          </div>
+        {/* Right Corner Badges: User Avatar + Wearable Sensor Rig Widget */}
+        <div className="flex items-center gap-3 self-start lg:self-auto">
+          {/* Wearable Chest-Rig Hardware Widget */}
+          <WearableRigWidget />
 
-          <div className="w-10 h-10 rounded-full ring-2 ring-teal-500/30 overflow-hidden shadow-xs bg-gradient-to-tr from-teal-400 to-indigo-500 flex items-center justify-center text-white font-bold text-sm">
+          {/* User profile avatar */}
+          <div className="w-11 h-11 rounded-2xl ring-2 ring-teal-500/30 overflow-hidden shadow-xs bg-gradient-to-tr from-teal-400 to-indigo-500 flex items-center justify-center text-white font-extrabold text-sm">
             <span>A</span>
           </div>
         </div>
       </div>
+
+      {/* Sliding Destination Carousel Bar */}
+      <SlidingDestinationBar
+        selectedDestination={selectedDestination}
+        onSelectDestination={onSelectDestination}
+      />
 
       {/* Voice Hotword & Start Interactive Banner */}
       <div className="bg-gradient-to-r from-teal-50 via-sky-50 to-pink-50 border border-teal-200/90 rounded-3xl p-4 sm:p-5 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
@@ -222,14 +263,13 @@ export default function HomeView({
               <span className={`w-2 h-2 rounded-full ${isHomeListening ? 'bg-emerald-500 animate-ping' : 'bg-slate-300'}`} />
             </div>
             <p className="text-sm font-bold text-slate-800 mt-0.5">
-              {voiceStatusText}
+              {interimTranscript ? `“${interimTranscript}”` : voiceStatusText}
             </p>
           </div>
         </div>
 
         {/* Audio waves & Quick "Say Start" test pill */}
         <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-          {/* Animated sound wave bars */}
           <div className="flex items-end gap-1 h-6">
             {audioBars.map((height, i) => (
               <span
@@ -253,15 +293,14 @@ export default function HomeView({
         </div>
       </div>
 
-      {/* Hero Destination Selection Card */}
+      {/* Hero Destination Selection Card with 3D Realistic Compass */}
       <div className="bg-white rounded-3xl border border-pink-100 p-6 md:p-8 shadow-sm flex flex-col lg:flex-row items-center justify-between gap-8 relative overflow-hidden">
-        {/* Subtle background glow */}
         <div className="absolute -right-20 -top-20 w-80 h-80 bg-teal-100/40 rounded-full blur-3xl pointer-events-none" />
 
         <div className="w-full lg:max-w-xl space-y-5 z-10">
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-              Choose destination
+              Active Destination Course
             </label>
 
             {/* Selector box with Dropdown */}
@@ -337,11 +376,11 @@ export default function HomeView({
                   onClick={() => onSelectDestination(item.id)}
                   className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
                     isCurrent
-                      ? 'bg-rose-50 border-rose-300 text-rose-700 shadow-xs'
-                      : 'bg-pink-50/60 hover:bg-pink-100/80 border-pink-200 text-slate-700'
+                      ? 'bg-teal-50 border-teal-400 text-teal-800 shadow-xs ring-1 ring-teal-300 font-bold'
+                      : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
                   }`}
                 >
-                  <Icon className="w-3.5 h-3.5 text-rose-500" />
+                  <Icon className="w-3.5 h-3.5 text-teal-600" />
                   <span>{item.name}</span>
                 </button>
               );
@@ -368,19 +407,12 @@ export default function HomeView({
           </div>
         </div>
 
-        {/* Circular Radar / Wayfinding Compass Animation */}
-        <div className="relative flex items-center justify-center p-6">
-          <div className="w-48 h-48 md:w-56 md:h-56 rounded-full border-2 border-dashed border-teal-300/60 flex items-center justify-center relative animate-[spin_60s_linear_infinite]">
-            <div className="w-36 h-36 rounded-full border border-pink-200 flex items-center justify-center bg-gradient-to-tr from-teal-50 via-rose-50 to-white" />
-          </div>
-
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="w-24 h-24 rounded-full bg-gradient-to-tr from-teal-400 to-indigo-400 p-1 shadow-lg shadow-teal-500/20 flex items-center justify-center">
-              <div className="w-full h-full rounded-full bg-white flex items-center justify-center">
-                <Compass className="w-10 h-10 text-teal-600 animate-pulse-slow" />
-              </div>
-            </div>
-          </div>
+        {/* Realistic 3D Nautical Compass Display */}
+        <div className="relative flex items-center justify-center p-2">
+          <RealisticCompass
+            headingDegrees={72}
+            headingText="ENE · 072°"
+          />
         </div>
       </div>
 
