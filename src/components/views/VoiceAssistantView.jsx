@@ -145,7 +145,7 @@ export default function VoiceAssistantView({
     if (recognizerRef.current) {
       try {
         recognizerRef.current.stop();
-      } catch (e) {}
+      } catch (e) { }
       recognizerRef.current = null;
     }
     setMicVolume(0);
@@ -224,14 +224,12 @@ export default function VoiceAssistantView({
 
           <button
             onClick={onToggleSound}
-            className={`w-11 h-6 rounded-full transition-colors relative p-0.5 cursor-pointer ${
-              soundEnabled ? 'bg-teal-500' : 'bg-slate-300'
-            }`}
+            className={`w-11 h-6 rounded-full transition-colors relative p-0.5 cursor-pointer ${soundEnabled ? 'bg-teal-500' : 'bg-slate-300'
+              }`}
           >
             <div
-              className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform ${
-                soundEnabled ? 'translate-x-5' : 'translate-x-0'
-              }`}
+              className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform ${soundEnabled ? 'translate-x-5' : 'translate-x-0'
+                }`}
             />
           </button>
         </div>
@@ -255,9 +253,8 @@ export default function VoiceAssistantView({
           {/* Status pill */}
           <div className="mb-6 flex items-center gap-2 px-3.5 py-1 rounded-full bg-teal-50 border border-teal-200 text-teal-700 text-xs font-bold shadow-xs">
             <span
-              className={`w-2 h-2 rounded-full ${
-                isListening ? 'bg-emerald-500 animate-ping' : 'bg-teal-500'
-              }`}
+              className={`w-2 h-2 rounded-full ${isListening ? 'bg-emerald-500 animate-ping' : 'bg-teal-500'
+                }`}
             />
             <span>{isListening ? 'Listening... Speak now!' : 'Tap microphone to speak'}</span>
           </div>
@@ -265,11 +262,10 @@ export default function VoiceAssistantView({
           {/* Central Microphone Orb with radiant audio wave reaction */}
           <div className="relative flex items-center justify-center my-4">
             <div
-              className={`absolute w-52 h-52 rounded-full transition-all duration-300 ${
-                isListening
-                  ? 'bg-gradient-to-tr from-teal-300/40 via-sky-300/40 to-pink-300/40 animate-ping opacity-75'
-                  : 'bg-gradient-to-tr from-teal-100/30 via-slate-100/30 to-pink-100/30 opacity-40'
-              }`}
+              className={`absolute w-52 h-52 rounded-full transition-all duration-300 ${isListening
+                ? 'bg-gradient-to-tr from-teal-300/40 via-sky-300/40 to-pink-300/40 animate-ping opacity-75'
+                : 'bg-gradient-to-tr from-teal-100/30 via-slate-100/30 to-pink-100/30 opacity-40'
+                }`}
               style={{
                 transform: `scale(${1 + micVolume / 120})`,
               }}
@@ -278,18 +274,16 @@ export default function VoiceAssistantView({
             <div className="w-44 h-44 rounded-full border border-teal-200 flex items-center justify-center bg-white shadow-lg shadow-teal-500/10">
               <button
                 onClick={handleMicToggle}
-                className={`w-32 h-32 rounded-full p-1 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-md cursor-pointer ${
-                  isListening
-                    ? 'bg-gradient-to-br from-rose-400 to-rose-600 ring-4 ring-rose-200'
-                    : 'bg-gradient-to-br from-teal-300 via-sky-200 to-pink-200 ring-4 ring-teal-100'
-                }`}
+                className={`w-32 h-32 rounded-full p-1 flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-md cursor-pointer ${isListening
+                  ? 'bg-gradient-to-br from-rose-400 to-rose-600 ring-4 ring-rose-200'
+                  : 'bg-gradient-to-br from-teal-300 via-sky-200 to-pink-200 ring-4 ring-teal-100'
+                  }`}
                 aria-label="Toggle voice input"
               >
                 <div className="w-full h-full rounded-full bg-white flex items-center justify-center">
                   <Mic
-                    className={`w-12 h-12 transition-colors ${
-                      isListening ? 'text-rose-600 animate-pulse' : 'text-slate-800'
-                    }`}
+                    className={`w-12 h-12 transition-colors ${isListening ? 'text-rose-600 animate-pulse' : 'text-slate-800'
+                      }`}
                   />
                 </div>
               </button>
@@ -301,9 +295,8 @@ export default function VoiceAssistantView({
             {audioBars.map((height, i) => (
               <span
                 key={i}
-                className={`w-1.5 rounded-full transition-all duration-100 ${
-                  isListening ? 'bg-gradient-to-t from-teal-400 to-rose-400' : 'bg-slate-200'
-                }`}
+                className={`w-1.5 rounded-full transition-all duration-100 ${isListening ? 'bg-gradient-to-t from-teal-400 to-rose-400' : 'bg-slate-200'
+                  }`}
                 style={{
                   height: isListening ? `${height}px` : '6px',
                 }}
@@ -355,9 +348,8 @@ export default function VoiceAssistantView({
                   return (
                     <div
                       key={msg.id}
-                      className={`flex items-start gap-2.5 ${
-                        isUser ? 'justify-end' : 'justify-start'
-                      }`}
+                      className={`flex items-start gap-2.5 ${isUser ? 'justify-end' : 'justify-start'
+                        }`}
                     >
                       {!isUser && (
                         <div className="w-7 h-7 rounded-xl bg-teal-50 border border-teal-200 text-teal-600 flex items-center justify-center shrink-0 mt-0.5">
@@ -366,11 +358,10 @@ export default function VoiceAssistantView({
                       )}
 
                       <div
-                        className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-medium leading-relaxed ${
-                          isUser
-                            ? 'bg-[#FCE8EB] text-slate-800 rounded-tr-none'
-                            : 'bg-[#E6F7F5] text-slate-900 rounded-tl-none border border-teal-200/60'
-                        }`}
+                        className={`max-w-[82%] px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-medium leading-relaxed ${isUser
+                          ? 'bg-[#FCE8EB] text-slate-800 rounded-tr-none'
+                          : 'bg-[#E6F7F5] text-slate-900 rounded-tl-none border border-teal-200/60'
+                          }`}
                       >
                         {msg.text}
                       </div>
